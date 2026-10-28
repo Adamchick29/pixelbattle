@@ -1,0 +1,17 @@
+.git
+.venv
+**/node_modules
+**/dist
+# The vendored UI kit exports these prebuilt files; they are build inputs.
+!vendor/pixel-kit-react/dist/
+!vendor/pixel-kit-react/dist/**
+**/__pycache__
+.env*
+**/.env*
+**/.venv
+.local
+test-results
+playwright-report
+**/test-results
+**/playwright-report
+**/*.tsbuildinfo

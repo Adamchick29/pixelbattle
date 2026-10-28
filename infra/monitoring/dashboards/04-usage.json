@@ -1,0 +1,23 @@
+{
+  "title": "Использование приложения",
+  "rows": [
+    {
+      "title": "Посещения и рисование",
+      "panels": [
+        { "title": "Открытия приложения за час", "description": "Количество загрузок страницы за предшествующий час. Метрика измеряется с интервалом 15 секунд; точный календарный учет хранится в PostgreSQL.", "width": 6, "expr": ["increase(pixel_battle_page_views_total[1h])"], "alias": ["Загрузки за час"] },
+        { "title": "Все открытия приложения", "width": 6, "expr": ["pixel_battle_page_views_total"], "alias": ["Загрузки"] },
+        { "title": "Подключения к полю", "width": 6, "expr": ["pixel_battle_websocket_connections"], "alias": ["Активные соединения"] },
+        { "title": "Покраски за минуту", "width": 6, "expr": ["increase(pixel_battle_placements_total[1m])"], "alias": ["Пиксели"] }
+      ]
+    },
+    {
+      "title": "Работа API",
+      "panels": [
+        { "title": "Запросы в секунду", "width": 6, "expr": ["sum(rate(pixel_battle_http_requests_total[2m])) by (route)"], "alias": ["{{route}}"] },
+        { "title": "HTTP-ошибки за 5 минут", "width": 6, "expr": ["sum(increase(pixel_battle_http_requests_total{status=~\"[45]..\"}[5m])) by (status)"], "alias": ["HTTP {{status}}"] },
+        { "title": "Задержка API, p95", "width": 6, "unit": "s", "expr": ["histogram_quantile(0.95, sum(rate(pixel_battle_http_request_duration_seconds_bucket[5m])) by (le, route))"], "alias": ["{{route}}"] },
+        { "title": "Отклонено из-за задержки", "width": 6, "expr": ["increase(pixel_battle_placement_rejections_total{reason=\"cooldown\"}[5m])"], "alias": ["За 5 минут"] }
+      ]
+    }
+  ]
+}

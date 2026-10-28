@@ -1,0 +1,21 @@
+{
+  "title": "Ресурсы сервера",
+  "rows": [
+    {
+      "title": "Процессор",
+      "panels": [
+        { "title": "Занято и свободно CPU", "width": 8, "unit": "%", "expr": ["100 - avg(rate(node_cpu_seconds_total{mode=\"idle\"}[2m])) * 100", "avg(rate(node_cpu_seconds_total{mode=\"idle\"}[2m])) * 100"], "alias": ["Занято", "Свободно"] },
+        { "title": "Логические ядра", "width": 4, "expr": ["count(node_cpu_seconds_total{mode=\"idle\"})"], "alias": ["Всего ядер"] }
+      ]
+    },
+    {
+      "title": "Память и диски",
+      "panels": [
+        { "title": "Оперативная память", "width": 6, "unit": "GiB", "expr": ["node_memory_MemTotal_bytes / 1024^3", "(node_memory_MemTotal_bytes - node_memory_MemAvailable_bytes) / 1024^3", "node_memory_MemAvailable_bytes / 1024^3"], "alias": ["Всего", "Используется", "Доступно"] },
+        { "title": "Диски: всего", "width": 6, "unit": "GiB", "expr": ["node_filesystem_size_bytes{fstype!~\"tmpfs|overlay|squashfs|nsfs\",mountpoint!~\"/run.*|/dev.*\"} / 1024^3"], "alias": ["{{mountpoint}}"] },
+        { "title": "Диски: занято", "width": 6, "unit": "GiB", "expr": ["(node_filesystem_size_bytes{fstype!~\"tmpfs|overlay|squashfs|nsfs\",mountpoint!~\"/run.*|/dev.*\"} - node_filesystem_free_bytes{fstype!~\"tmpfs|overlay|squashfs|nsfs\",mountpoint!~\"/run.*|/dev.*\"}) / 1024^3"], "alias": ["{{mountpoint}}"] },
+        { "title": "Диски: доступно", "width": 6, "unit": "GiB", "expr": ["node_filesystem_avail_bytes{fstype!~\"tmpfs|overlay|squashfs|nsfs\",mountpoint!~\"/run.*|/dev.*\"} / 1024^3"], "alias": ["{{mountpoint}}"] }
+      ]
+    }
+  ]
+}

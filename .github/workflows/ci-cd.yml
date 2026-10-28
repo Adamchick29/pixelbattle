@@ -1,0 +1,224 @@
+name: Test, build and deploy
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      release_sha:
+        description: "Existing release: full commit SHA. Leave empty to build this revision."
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  frontend:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ inputs.release_sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+        working-directory: frontend
+      - run: npm run lint && npm run typecheck && npm test && npm run build
+        working-directory: frontend
+      - run: npm audit --audit-level=high
+        working-directory: frontend
+
+  backend:
+    runs-on: ubuntu-24.04
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_USER: pixel
+          POSTGRES_PASSWORD: pixel
+          POSTGRES_DB: pixel_battle_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U pixel -d pixel_battle_test"
+          --health-interval 5s --health-timeout 3s --health-retries 20
+      redis:
+        image: redis:8-alpine
+        ports: ["6379:6379"]
+        options: --health-cmd "redis-cli ping" --health-interval 5s --health-retries 20
+    env:
+      TEST_DATABASE_URL: postgresql+asyncpg://pixel:pixel@127.0.0.1:5432/pixel_battle_test
+      DATABASE_URL: postgresql+asyncpg://pixel:pixel@127.0.0.1:5432/pixel_battle_test
+      TEST_REDIS_URL: redis://127.0.0.1:6379/15
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ inputs.release_sha || github.sha }}
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@d0d8abe699bfb85fec6de9f7adb5ae17292296ff # v6
+        with:
+          version: 0.13.6
+          enable-cache: true
+      - run: uv sync --frozen --extra dev
+        working-directory: backend
+      - run: uv run ruff check app migrations tests
+        working-directory: backend
+      - run: uv run alembic upgrade head && uv run alembic check && uv run pytest -q
+        working-directory: backend
+      - name: Validate deployment script syntax
+        run: for file in scripts/*.sh; do bash -n "$file"; done
+      - name: ShellCheck
+        run: >-
+          docker run --rm --network none -v "$PWD/scripts:/mnt:ro"
+          koalaman/shellcheck:stable@sha256:bb596a0d169b85ddd81d8b6d3a2ff6d5baf5fca10b97f575ebc647c3dff62b3d
+          /mnt/bootstrap.sh /mnt/deploy-from-ci.sh /mnt/deploy-server.sh /mnt/configure-local.sh /mnt/with-ghcr-auth.sh
+
+  integration:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ inputs.release_sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - uses: astral-sh/setup-uv@d0d8abe699bfb85fec6de9f7adb5ae17292296ff # v6
+        with:
+          version: 0.13.6
+      - name: Generate isolated CI configuration
+        run: |
+          bash scripts/configure-local.sh
+          MONITORING_PASSWORD=$(openssl rand -hex 24)
+          echo "::add-mask::$MONITORING_PASSWORD"
+          export MONITORING_PASSWORD
+          python3 scripts/set-local-monitoring.py
+          echo "MONITORING_PASSWORD=$MONITORING_PASSWORD" >> "$GITHUB_ENV"
+      - run: docker compose up --build -d --wait --wait-timeout 180
+      - run: python3 scripts/check-deployment.py
+      - run: npm ci && npx playwright install --with-deps chromium
+        working-directory: frontend
+      - run: npm run test:e2e
+        working-directory: frontend
+      - name: Check persistence across restart
+        run: python3 scripts/check-persistence.py
+      - run: uv sync --frozen --extra dev
+        working-directory: backend
+      - name: Load test 100 connections and 20 placements per second
+        run: backend/.venv/bin/python scripts/load-test.py --users 100 --duration 15 --provision
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: failure()
+        with:
+          name: browser-failure
+          path: |
+            frontend/playwright-report
+            frontend/test-results
+      - name: Container diagnostics
+        if: failure()
+        run: docker compose ps && docker compose logs --tail 50
+      - name: Stop CI services
+        if: always()
+        run: docker compose down --volumes
+
+  images:
+    if: github.event_name != 'pull_request' && !inputs.release_sha
+    needs: [frontend, backend, integration]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      matrix:
+        service: [api, web]
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: image
+        env:
+          SERVICE: ${{ matrix.service }}
+        run: |
+          echo "tag=ghcr.io/${GITHUB_REPOSITORY,,}/$SERVICE:$GITHUB_SHA" >> "$GITHUB_OUTPUT"
+          if [[ $SERVICE == api ]]; then echo "file=backend/Dockerfile" >> "$GITHUB_OUTPUT"; else echo "file=frontend/Dockerfile" >> "$GITHUB_OUTPUT"; fi
+      - uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          file: ${{ steps.image.outputs.file }}
+          push: true
+          platforms: linux/amd64
+          tags: ${{ steps.image.outputs.tag }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+          cache-from: type=gha,scope=${{ matrix.service }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.service }}
+          provenance: true
+
+  deploy:
+    if: >-
+      always() && github.event_name != 'pull_request' &&
+      needs.frontend.result == 'success' && needs.backend.result == 'success' &&
+      needs.integration.result == 'success' &&
+      (needs.images.result == 'success' ||
+      (github.event_name == 'workflow_dispatch' && inputs.release_sha != ''))
+    needs: [frontend, backend, integration, images]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: read
+    environment: production
+    concurrency:
+      group: pixel-battle-production
+      cancel-in-progress: false
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          # Always use this workflow revision's deployment/authentication scripts.
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Check out configuration for an existing release
+        if: inputs.release_sha != ''
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ inputs.release_sha }}
+          path: .release
+          sparse-checkout: |
+            compose.yaml
+            infra/
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+      - name: Bootstrap VPS and deploy release
+        env:
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_PORT: ${{ vars.SSH_PORT || '22' }}
+          SSH_USER: ${{ secrets.SSH_USER }}
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          SSH_KNOWN_HOSTS: ${{ secrets.SSH_KNOWN_HOSTS }}
+          APP_ORIGIN: ${{ vars.APP_ORIGIN }}
+          POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+          REDIS_PASSWORD: ${{ secrets.REDIS_PASSWORD }}
+          MONITORING_USER: ${{ vars.MONITORING_USER || 'monitor' }}
+          MONITORING_PASSWORD: ${{ secrets.MONITORING_PASSWORD }}
+          GHCR_USER: ${{ github.actor }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_SHA: ${{ inputs.release_sha || github.sha }}
+          RELEASE_CONFIG_DIR: ${{ inputs.release_sha != '' && '.release' || '.' }}
+        run: |
+          export IMAGE_PREFIX="ghcr.io/${GITHUB_REPOSITORY,,}"
+          export IMAGE_TAG="$RELEASE_SHA"
+          bash scripts/deploy-from-ci.sh

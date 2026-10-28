@@ -1,0 +1,161 @@
+name: pixel-battle
+
+x-api-environment: &api-environment
+  DATABASE_URL: postgresql+asyncpg://pixel:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}@postgres:5432/pixel_battle
+  REDIS_URL: redis://:${REDIS_PASSWORD:?Set REDIS_PASSWORD}@redis:6379/0
+  ALLOWED_ORIGINS: ${APP_ORIGIN:-http://localhost:8787}
+  SESSION_COOKIE_SECURE: ${SESSION_COOKIE_SECURE:-false}
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  proxy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "${APP_BIND:-0.0.0.0}:${APP_PORT:-8787}:80"
+    environment:
+      MONITORING_USER: ${MONITORING_USER:-monitor}
+      MONITORING_PASSWORD_HASH: ${MONITORING_PASSWORD_HASH:?Set MONITORING_PASSWORD_HASH}
+    volumes:
+      - ./infra/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      api: { condition: service_healthy }
+      web: { condition: service_healthy }
+    mem_limit: 128m
+    logging: *logging
+    healthcheck:
+      test: [CMD, wget, -q, -O, /dev/null, "http://127.0.0.1/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  web:
+    image: ${IMAGE_PREFIX:-pixel-battle}/web:${IMAGE_TAG:-local}
+    restart: unless-stopped
+    mem_limit: 96m
+    logging: *logging
+
+  migrate:
+    image: ${IMAGE_PREFIX:-pixel-battle}/api:${IMAGE_TAG:-local}
+    command: [alembic, upgrade, head]
+    environment: *api-environment
+    depends_on:
+      postgres: { condition: service_healthy }
+    mem_limit: 256m
+    logging: *logging
+    healthcheck: { disable: true }
+
+  api:
+    image: ${IMAGE_PREFIX:-pixel-battle}/api:${IMAGE_TAG:-local}
+    restart: unless-stopped
+    environment: *api-environment
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+      redis: { condition: service_healthy }
+    mem_limit: 512m
+    logging: *logging
+
+  postgres:
+    image: postgres:18-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: pixel_battle
+      POSTGRES_USER: pixel
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql
+    healthcheck:
+      test: [CMD-SHELL, "pg_isready -U pixel -d pixel_battle"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    mem_limit: 768m
+    logging: *logging
+
+  redis:
+    image: redis:8-alpine
+    restart: unless-stopped
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?Set REDIS_PASSWORD}
+    command: [sh, -c, 'exec redis-server --appendonly yes --maxmemory 96mb --maxmemory-policy noeviction --requirepass "$$REDIS_PASSWORD"']
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: [CMD-SHELL, 'REDISCLI_AUTH="$$REDIS_PASSWORD" redis-cli ping | grep -q PONG']
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    mem_limit: 192m
+    logging: *logging
+
+  victoriametrics:
+    image: victoriametrics/victoria-metrics:v1.155.0
+    restart: unless-stopped
+    command:
+      - -storageDataPath=/storage
+      - -retentionPeriod=30d
+      - -promscrape.config=/etc/vm/scrape.yml
+      - -vmui.customDashboardsPath=/etc/vm/dashboards
+      - -http.pathPrefix=/monitoring
+      - -memory.allowedBytes=192MiB
+    volumes:
+      - vm_data:/storage
+      - ./infra/monitoring/scrape.yml:/etc/vm/scrape.yml:ro
+      - ./infra/monitoring/dashboards:/etc/vm/dashboards:ro
+    mem_limit: 384m
+    logging: *logging
+
+  node-exporter:
+    image: quay.io/prometheus/node-exporter:v1.10.2
+    restart: unless-stopped
+    pid: host
+    command:
+      - --path.rootfs=/host
+      - --path.procfs=/host/proc
+      - --path.sysfs=/host/sys
+      - --collector.filesystem.mount-points-exclude=^/(dev|proc|sys|var/lib/docker/.+|var/lib/containers/storage/.+)($$|/)
+    volumes:
+      - /:/host:ro,rslave
+    mem_limit: 96m
+    logging: *logging
+
+  cadvisor:
+    image: ghcr.io/google/cadvisor:0.55.1
+    restart: unless-stopped
+    privileged: true
+    command:
+      - --docker_only=true
+      - --housekeeping_interval=15s
+      - --store_container_labels=true
+      - --disable_metrics=percpu,sched,tcp,udp,hugetlb,referenced_memory,resctrl
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker:/var/lib/docker:ro
+      - /dev/disk:/dev/disk:ro
+    mem_limit: 256m
+    logging: *logging
+
+  blackbox-exporter:
+    image: quay.io/prometheus/blackbox-exporter:v0.27.0
+    restart: unless-stopped
+    command: [--config.file=/etc/blackbox/blackbox.yml]
+    volumes:
+      - ./infra/monitoring/blackbox.yml:/etc/blackbox/blackbox.yml:ro
+    mem_limit: 96m
+    logging: *logging
+
+volumes:
+  postgres_data:
+  redis_data:
+  vm_data:
+  caddy_data:
+  caddy_config:

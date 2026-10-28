@@ -1,0 +1,18 @@
+{
+  "name": "@pixel-kit/react",
+  "version": "0.1.0",
+  "description": "Pixel interface components built on Radix Primitives",
+  "type": "module",
+  "license": "MIT",
+  "sideEffects": ["**/*.css"],
+  "files": ["dist", "src", "README.md", "LICENSE"],
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js" },
+    "./styles.css": "./dist/styles.css"
+  },
+  "peerDependencies": { "react": "^18.0.0 || ^19.0.0", "react-dom": "^18.0.0 || ^19.0.0" },
+  "dependencies": { "radix-ui": "^1.4.3" }
+}

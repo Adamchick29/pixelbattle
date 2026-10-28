@@ -1,0 +1,14 @@
+{
+  "title": "Доступность",
+  "rows": [
+    {
+      "title": "Состояние сервисов: 1 — доступно, 0 — отказ",
+      "panels": [
+        { "title": "HTTP-проверки", "width": 6, "expr": ["probe_success{job=\"http\"}"], "alias": ["{{instance}}"] },
+        { "title": "Сбор метрик", "width": 6, "expr": ["up"], "alias": ["{{job}}"] },
+        { "title": "PostgreSQL и Redis", "width": 6, "expr": ["pixel_battle_dependency_up"], "alias": ["{{dependency}}"] },
+        { "title": "Время HTTP-проверки", "width": 6, "unit": "s", "expr": ["probe_duration_seconds{job=\"http\"}"], "alias": ["{{instance}}"] }
+      ]
+    }
+  ]
+}

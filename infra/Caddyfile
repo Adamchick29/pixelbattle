@@ -1,0 +1,42 @@
+{
+    admin off
+    auto_https off
+}
+
+:80 {
+    encode zstd gzip
+    header {
+        X-Content-Type-Options nosniff
+        Referrer-Policy same-origin
+        X-Frame-Options DENY
+        Permissions-Policy "camera=(), microphone=(), geolocation=()"
+    }
+
+    @monitoring path /monitoring /monitoring/*
+    handle @monitoring {
+        basic_auth {
+            {$MONITORING_USER} {$MONITORING_PASSWORD_HASH}
+        }
+        @readable {
+            method GET POST
+            path /monitoring/vmui /monitoring/vmui/* /monitoring/api/v1/query /monitoring/api/v1/query_range /monitoring/api/v1/labels /monitoring/api/v1/label/* /monitoring/api/v1/series /monitoring/api/v1/metadata /monitoring/api/v1/status/* /monitoring/health /monitoring/targets
+            path /monitoring/prometheus/vmui/* /monitoring/prometheus/api/v1/query /monitoring/prometheus/api/v1/query_range /monitoring/prometheus/api/v1/labels /monitoring/prometheus/api/v1/label/* /monitoring/prometheus/api/v1/series /monitoring/prometheus/api/v1/metadata /monitoring/prometheus/api/v1/status/* /monitoring/prometheus/api/v1/export
+        }
+        handle @readable {
+            reverse_proxy victoriametrics:8428
+        }
+        respond 403
+    }
+
+    @api path /api/* /health/live /health/ready
+    handle @api {
+        reverse_proxy api:8000
+    }
+    handle /metrics {
+        respond 404
+    }
+    handle {
+        header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
+        reverse_proxy web:8080
+    }
+}

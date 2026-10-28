@@ -1,0 +1,14 @@
+{
+  "title": "Контейнеры",
+  "rows": [
+    {
+      "title": "Сервисы Pixel Battle",
+      "panels": [
+        { "title": "CPU по сервисам", "width": 6, "unit": "ядер", "expr": ["sum(rate(container_cpu_usage_seconds_total{container_label_com_docker_compose_project=\"pixel-battle\",container_label_com_docker_compose_service!=\"\"}[2m])) by (container_label_com_docker_compose_service)"], "alias": ["{{container_label_com_docker_compose_service}}"] },
+        { "title": "Память по сервисам", "width": 6, "unit": "MiB", "expr": ["sum(container_memory_working_set_bytes{container_label_com_docker_compose_project=\"pixel-battle\",container_label_com_docker_compose_service!=\"\"}) by (container_label_com_docker_compose_service) / 1024^2"], "alias": ["{{container_label_com_docker_compose_service}}"] },
+        { "title": "Лимит памяти контейнера", "width": 6, "unit": "MiB", "expr": ["max(container_spec_memory_limit_bytes{container_label_com_docker_compose_project=\"pixel-battle\",container_label_com_docker_compose_service!=\"\"}) by (container_label_com_docker_compose_service) / 1024^2"], "alias": ["{{container_label_com_docker_compose_service}}"] },
+        { "title": "Прием и передача сети", "width": 6, "unit": "KiB/s", "expr": ["sum(rate(container_network_receive_bytes_total{container_label_com_docker_compose_project=\"pixel-battle\"}[2m])) / 1024", "sum(rate(container_network_transmit_bytes_total{container_label_com_docker_compose_project=\"pixel-battle\"}[2m])) / 1024"], "alias": ["Получено", "Отправлено"] }
+      ]
+    }
+  ]
+}
